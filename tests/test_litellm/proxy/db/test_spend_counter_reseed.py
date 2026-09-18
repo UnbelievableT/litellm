@@ -388,13 +388,14 @@ class _FakeRedisSpendCounter:
 
 
 class _UnavailableSpendTableWhileAnotherPodSeeds:
-    def __init__(self, redis: _FakeRedisSpendCounter, other_pod_spend: float | None) -> None:
+    def __init__(self, redis: _FakeRedisSpendCounter, counter_key: str, other_pod_spend: float | None) -> None:
         self._redis: Final = redis
+        self._counter_key: Final = counter_key
         self._other_pod_spend: Final = other_pod_spend
 
     async def find_unique(self, where: Mapping[str, object]) -> SimpleNamespace:
         if self._other_pod_spend is not None:
-            self._redis.value = self._other_pod_spend
+            await self._redis.async_set_cache(key=self._counter_key, value=self._other_pod_spend, nx=True)
         raise ConnectionError("database unavailable")
 
 
@@ -436,11 +437,15 @@ async def test_cold_seed_from_source_cache_keeps_another_pods_redis_seed_when_db
     from litellm.proxy import proxy_server
 
     redis: Final = _FakeRedisSpendCounter(existing=None)
-    cache: Final = DualCache(in_memory_cache=InMemoryCache())
-    cache.redis_cache = redis  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed fake standing in for RedisCache
+    cache: Final = DualCache(
+        in_memory_cache=InMemoryCache(),
+        redis_cache=redis,  # pyright: ignore[reportArgumentType]  # duck-typed fake standing in for RedisCache
+    )
     counter_key: Final = "spend:user:db-down-multi-pod-user"
     cached_spend: Final = 6.0
-    table: Final = _UnavailableSpendTableWhileAnotherPodSeeds(redis=redis, other_pod_spend=other_pod_spend)
+    table: Final = _UnavailableSpendTableWhileAnotherPodSeeds(
+        redis=redis, counter_key=counter_key, other_pod_spend=other_pod_spend
+    )
     user_cache: Final = DualCache(in_memory_cache=InMemoryCache())
     user_cache.in_memory_cache.set_cache(key="db-down-multi-pod-user", value={"spend": cached_spend})
     monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
@@ -477,8 +482,10 @@ async def test_seed_if_absent_keeps_the_in_memory_value_seeded_first(already_see
 @pytest.mark.parametrize("already_seeded", [None, 9.5], ids=["cold", "seeded_by_another_pod"])
 async def test_seed_if_absent_keeps_the_redis_value_seeded_first(already_seeded: float | None) -> None:
     redis: Final = _FakeRedisSpendCounter(existing=already_seeded)
-    cache: Final = DualCache(in_memory_cache=InMemoryCache())
-    cache.redis_cache = redis  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed fake standing in for RedisCache
+    cache: Final = DualCache(
+        in_memory_cache=InMemoryCache(),
+        redis_cache=redis,  # pyright: ignore[reportArgumentType]  # duck-typed fake standing in for RedisCache
+    )
     counter_key: Final = "spend:team:seed-if-absent"
 
     result: Final = await SpendCounterReseed.seed_if_absent(
