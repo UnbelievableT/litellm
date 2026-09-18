@@ -387,6 +387,17 @@ class _FakeRedisSpendCounter:
         return self.value
 
 
+class _UnavailableSpendTableWhileAnotherPodSeeds:
+    def __init__(self, redis: _FakeRedisSpendCounter, other_pod_spend: float | None) -> None:
+        self._redis: Final = redis
+        self._other_pod_spend: Final = other_pod_spend
+
+    async def find_unique(self, where: Mapping[str, object]) -> SimpleNamespace:
+        if self._other_pod_spend is not None:
+            self._redis.value = self._other_pod_spend
+        raise ConnectionError("database unavailable")
+
+
 @pytest.mark.asyncio
 async def test_concurrent_cold_seeds_from_source_cache_do_not_double_when_db_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
@@ -415,6 +426,34 @@ async def test_concurrent_cold_seeds_from_source_cache_do_not_double_when_db_is_
     await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
 
     assert cache.in_memory_cache.get_cache(key=counter_key) == cached_spend
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("other_pod_spend", [None, 9.5], ids=["cold", "seeded_by_another_pod_during_db_read"])
+async def test_cold_seed_from_source_cache_keeps_another_pods_redis_seed_when_db_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, other_pod_spend: float | None
+) -> None:
+    from litellm.proxy import proxy_server
+
+    redis: Final = _FakeRedisSpendCounter(existing=None)
+    cache: Final = DualCache(in_memory_cache=InMemoryCache())
+    cache.redis_cache = redis  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed fake standing in for RedisCache
+    counter_key: Final = "spend:user:db-down-multi-pod-user"
+    cached_spend: Final = 6.0
+    table: Final = _UnavailableSpendTableWhileAnotherPodSeeds(redis=redis, other_pod_spend=other_pod_spend)
+    user_cache: Final = DualCache(in_memory_cache=InMemoryCache())
+    user_cache.in_memory_cache.set_cache(key="db-down-multi-pod-user", value={"spend": cached_spend})
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", user_cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=SimpleNamespace(litellm_usertable=table)))
+
+    await proxy_server._ensure_spend_counter_initialized(
+        counter_key=counter_key, source_cache_key="db-down-multi-pod-user"
+    )
+
+    expected: Final = cached_spend if other_pod_spend is None else other_pod_spend
+    assert redis.value == expected
+    assert cache.in_memory_cache.get_cache(key=counter_key) == expected
 
 
 @pytest.mark.asyncio

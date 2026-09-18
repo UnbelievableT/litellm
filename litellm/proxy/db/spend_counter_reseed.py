@@ -264,29 +264,15 @@ class SpendCounterReseed:
             # Redis key with db_spend; concurrent seeders read the winner's
             # value. INCRBYFLOAT-of-db_spend from N pods would multiply the
             # counter (N x db_spend) and trigger spurious budget alerts.
-            current_value: float = float(db_spend)
             try:
                 if spend_counter_cache.redis_cache is not None:
-                    seeded: Final = await spend_counter_cache.redis_cache.async_set_cache(
-                        key=counter_key,
-                        value=db_spend,
-                        nx=True,
+                    return await SpendCounterReseed.seed_if_absent(
+                        spend_counter_cache=spend_counter_cache, counter_key=counter_key, base_spend=db_spend
                     )
-                    if seeded:
-                        current_value = float(db_spend)
-                    else:
-                        cached: Final = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
-                        current_value = float(cached) if cached is not None else float(db_spend)
-                    spend_counter_cache.in_memory_cache.set_cache(
-                        key=counter_key,
-                        value=current_value,
-                    )
-                    record_spend_counter_value(counter_key, current_value)
-                else:
-                    cached_spend: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
-                    seeded_spend: Final = max(db_spend, float(cached_spend)) if cached_spend is not None else db_spend
-                    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=seeded_spend)
-                    return seeded_spend
+                cached_spend: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                seeded_spend: Final = max(db_spend, float(cached_spend)) if cached_spend is not None else db_spend
+                spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=seeded_spend)
+                return seeded_spend
             except Exception:
                 verbose_proxy_logger.exception(
                     "SpendCounterReseed.coalesced: failed to warm counter %s",
@@ -294,7 +280,7 @@ class SpendCounterReseed:
                 )
                 if require_cache_warm:
                     raise
-            return current_value
+            return db_spend
 
     @staticmethod
     async def window_from_table(
