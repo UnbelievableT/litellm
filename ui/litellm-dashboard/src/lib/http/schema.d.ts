@@ -28499,6 +28499,8 @@ export interface components {
         KeyMetadata: {
             /** Key Alias */
             key_alias?: string | null;
+            /** Key Exists */
+            key_exists?: boolean | null;
             /** Team Id */
             team_id?: string | null;
             /** User Email */

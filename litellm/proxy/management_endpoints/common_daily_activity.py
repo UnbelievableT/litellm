@@ -120,6 +120,7 @@ class _KeyMetadataDict(TypedDict, total=False):
     team_id: ReadOnly[str | None]
     user_id: ReadOnly[str | None]
     user_email: ReadOnly[str | None]
+    key_exists: ReadOnly[bool]
 
 
 def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str) -> KeyMetadata:
@@ -129,6 +130,7 @@ def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str
         team_id=meta.get("team_id"),
         user_id=meta.get("user_id"),
         user_email=meta.get("user_email"),
+        key_exists=meta.get("key_exists", False),
     )
 
 
@@ -473,6 +475,7 @@ async def get_api_key_metadata(
             "key_alias": k.key_alias,
             "team_id": k.team_id,
             "user_id": getattr(k, "user_id", None),
+            "key_exists": True,
         }
         for k in key_records
     }
